@@ -39,7 +39,7 @@ const COLORS = [
 // ==========================================
 const solveLogic = async (players, logs, impostorCount) => {
     try {
-        const response = await fetch('http://backend-logic.zeabur.app/solve', {
+        const response = await fetch('https://backend-logic.zeabur.app/solve', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
