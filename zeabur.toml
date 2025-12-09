@@ -1,0 +1,4 @@
+[[services]]
+name = "backend-api"
+dir = "backend"
+type = "nix"
