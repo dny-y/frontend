@@ -36,7 +36,7 @@ const COLORS = [
 ];
 
 // ==========================================
-// 2. 后端 API 连接逻辑
+// 2. 后端 API 连接逻辑 (含概率计算与兼容性修复)
 // ==========================================
 
 const toSimplified = (text) => {
@@ -50,14 +50,57 @@ const toSimplified = (text) => {
     .replace(/確/g, "确").replace(/據/g, "据").replace(/誤/g, "误");
 };
 
-// 更新 Mock 数据结构以匹配新版后端
+// [修改] 核心概率计算逻辑 - 增加对旧版后端的兼容
+const calculateProbabilities = (data) => {
+  if (!data || data.length === 0) return [];
+
+  // 1. 计算适应度
+  let totalFitness = 0;
+  const dataWithFitness = data.map(item => {
+    const score = item.score !== undefined ? item.score : (item.rank - 1) * 10; 
+    const fitness = 1.0 / (1.0 + score);
+    totalFitness += fitness;
+    return { ...item, fitness };
+  });
+
+  // 2. 归一化计算概率，并构建 details
+  return dataWithFitness.map(item => {
+    let finalDetails = [];
+
+    // 情况 A: 后端返回了详细日志 (新版)
+    if (item.details && Array.isArray(item.details)) {
+        finalDetails = item.details.map(d => ({
+            ...d,
+            content: toSimplified(d.content),
+            fact_check: toSimplified(d.fact_check)
+        }));
+    } 
+    // 情况 B: 后端只返回了简单原因 (旧版兼容)
+    else if (item.reason && Array.isArray(item.reason)) {
+        finalDetails = item.reason.map(r => ({
+            speaker: "System",
+            role: "Info",
+            content: toSimplified(r),
+            is_truth: !r.includes("撒谎") && !r.includes("❌"),
+            fact_check: ""
+        }));
+    }
+
+    return {
+        ...item,
+        probability: (item.fitness / totalFitness) * 100,
+        details: finalDetails
+    };
+  });
+};
+
+// Mock 数据结构
 const mockSolve = (players, logs) => {
   const suspects = {};
   players.forEach(p => suspects[p.name] = 0);
   
   // 生成 Mock Details
   const details = logs.map(log => {
-    // 简单模拟：如果 target 嫌疑高，假设指控是真的；否则是谎言
     const isTruth = Math.random() > 0.3; 
     return {
       speaker: log.actor || "SYSTEM",
@@ -72,21 +115,31 @@ const mockSolve = (players, logs) => {
     .sort(([,a], [,b]) => b - a)
     .map(([name]) => name);
 
-  return [
+  // 模拟两个解
+  const solutions = [
     { 
       rank: 1, 
       impostors: [sortedSuspects[0] || 'Red', sortedSuspects[1] || 'Blue'],
-      details: details.length > 0 ? details : [{speaker: "System", role: "SYSTEM", content: "网络连接失败，显示模拟数据", is_truth: false, fact_check: ""}]
+      details: details.length > 0 ? details : [{speaker: "System", role: "SYSTEM", content: "网络连接失败，显示模拟数据", is_truth: false, fact_check: ""}],
+      score: 0 
+    },
+    { 
+      rank: 2, 
+      impostors: [sortedSuspects[0], sortedSuspects[2] || sortedSuspects[1]].filter(Boolean),
+      details: [],
+      score: 20
     }
   ];
+  
+  return calculateProbabilities(solutions);
 };
 
 const solveLogic = async (players, logs, impostorCount) => {
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    const response = await fetch('https://backend-logic.zeabur.app/solve', {
+    const response = await fetch('https://logic-api.zeabur.app/solve', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -106,18 +159,8 @@ const solveLogic = async (players, logs, impostorCount) => {
     }
 
     const data = await response.json();
-    
-    // 繁简转换
-    const simplifiedData = data.map(item => ({
-      ...item,
-      details: item.details.map(d => ({
-        ...d,
-        content: toSimplified(d.content),
-        fact_check: toSimplified(d.fact_check)
-      }))
-    }));
+    return calculateProbabilities(data);
 
-    return simplifiedData;
   } catch (error) {
     console.warn("API Connection Failed, switching to Mock Mode:", error);
     return mockSolve(players, logs);
@@ -125,7 +168,7 @@ const solveLogic = async (players, logs, impostorCount) => {
 };
 
 // ==========================================
-// 3. 子组件
+// 3. UI 组件
 // ==========================================
 
 const PlayerAvatar = ({ player, size = "md", status = "alive", onClick, selected }) => {
@@ -174,7 +217,6 @@ const LocationPin = ({ loc, onClick, selected }) => (
   </div>
 );
 
-// [重构] 结果卡片组件 - 详细展示
 const AnalysisResultCard = ({ result, players, index }) => {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -208,7 +250,10 @@ const AnalysisResultCard = ({ result, players, index }) => {
         
         <div className="flex items-center gap-6">
           <div className="text-right hidden sm:block">
-            <span className="block text-2xl font-bold text-cyan-400">{(100 / (index + 1)).toFixed(1)}%</span>
+            <span className="block text-2xl font-bold text-cyan-400">
+              {result.probability ? result.probability.toFixed(1) : (100 / (index + 1)).toFixed(1)}
+              <span className="text-sm align-top">%</span>
+            </span>
             <span className="text-xs text-gray-500 uppercase">Probability</span>
           </div>
           <div className={`transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>
@@ -224,12 +269,10 @@ const AnalysisResultCard = ({ result, players, index }) => {
           </h4>
           <div className="space-y-2">
             {result.details?.map((item, i) => {
-              // 状态判断
               const isImpostor = item.role === "Impostor";
               const isTruth = item.is_truth;
               const isSystem = item.role === "SYSTEM";
               
-              // 颜色逻辑
               let borderClass = 'border-gray-700/50';
               let bgClass = 'bg-gray-800/50';
               let icon = null;
@@ -251,15 +294,13 @@ const AnalysisResultCard = ({ result, players, index }) => {
                 icon = <Check size={14} className="text-green-500" />;
               }
 
-              // 查找玩家颜色以显示头像或色块
               const p = players.find(x => x.name === item.speaker);
               const colorBg = p?.colorObj.bg || 'bg-gray-600';
 
               return (
                 <div key={i} className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 p-3 rounded border ${borderClass} ${bgClass}`}>
-                  {/* 身份与说话者 */}
                   <div className="flex items-center gap-3 w-32 shrink-0">
-                    {item.speaker !== "SYSTEM" && (
+                    {item.speaker !== "SYSTEM" && item.speaker !== "System" && (
                       <div className={`w-2 h-2 rounded-full ${colorBg}`} />
                     )}
                     <div className="flex flex-col">
@@ -272,21 +313,17 @@ const AnalysisResultCard = ({ result, players, index }) => {
                     </div>
                   </div>
 
-                  {/* 状态图标 */}
                   <div className="hidden sm:flex items-center justify-center w-8">
                     {icon}
                   </div>
 
-                  {/* 内容 */}
                   <div className="flex-1 text-sm text-gray-300 font-mono">
                     "{item.content}"
-                    {/* 如果有事实打脸，显示出来 */}
                     {item.fact_check && (
                       <span className="block sm:inline sm:ml-2 text-red-400 text-xs font-bold">
                         {item.fact_check}
                       </span>
                     )}
-                    {/* 内鬼说真话提示 */}
                     {isImpostor && isTruth && (
                       <span className="block sm:inline sm:ml-2 text-yellow-500 text-xs opacity-70">
                         (伪装: 内鬼说真话)
@@ -301,6 +338,9 @@ const AnalysisResultCard = ({ result, players, index }) => {
                 </div>
               );
             })}
+            {result.details?.length === 0 && (
+                <div className="text-center text-gray-500 py-4 italic">暂无详细日志 (后端未返回 details 数据)</div>
+            )}
           </div>
         </div>
       </div>
@@ -322,7 +362,7 @@ const SetupView = ({ players, setPlayers, impostorCount, setImpostorCount, onSta
     <div className="flex flex-col items-center justify-center h-full space-y-8 animate-fade-in overflow-y-auto">
       <div className="text-center space-y-2 mt-10">
         <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 tracking-tighter">
-          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.4</span>
+          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.2</span>
         </h1>
         <p className="text-gray-400">基于 Z3 求解器的逻辑推理系统</p>
       </div>
@@ -568,55 +608,44 @@ const GameView = ({ players, setPlayers, logs, setLogs, impostorCount, onSolve, 
 const AnalysisView = ({ analysisResults, players, onBack, onReset }) => {
   return (
     <div className="w-full h-full flex flex-col overflow-hidden animate-fade-in relative">
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar pb-32">
         <div className="max-w-4xl mx-auto min-h-full flex flex-col justify-center">
           {!analysisResults ? (
-            <div className="text-center space-y-4 py-20">
-              <div className="w-24 h-24 border-4 border-t-cyan-500 border-r-transparent border-b-cyan-500 border-l-transparent rounded-full animate-spin mx-auto" />
-              <h2 className="text-2xl font-mono text-cyan-400 animate-pulse">正在重构逻辑链...</h2>
-              <div className="text-gray-500 font-mono text-sm">
-                CALCULATING Z3 CONSTRAINTS...<br/>
-                DETECTING CONTRADICTIONS...<br/>
-                OPTIMIZING MODELS...
+            <div className="text-center space-y-6 py-20">
+              <div className="relative w-32 h-32 mx-auto">
+                <div className="absolute inset-0 border-4 border-cyan-500/30 rounded-full animate-ping" />
+                <div className="absolute inset-0 border-4 border-t-cyan-400 border-r-transparent border-b-cyan-400 border-l-transparent rounded-full animate-spin" />
+              </div>
+              <h2 className="text-3xl font-black text-white tracking-widest animate-pulse">PROCESSING...</h2>
+              <div className="text-cyan-500/50 font-mono text-sm space-y-1">
+                <p>Establishing Z3 constraints...</p>
+                <p>Verifying alibis...</p>
+                <p>Detecting contradictions...</p>
               </div>
             </div>
           ) : (
-            <div className="w-full space-y-6 pb-20">
-              <div className="text-center mb-8 mt-10">
-                <h2 className="text-4xl font-black text-white mb-2">分析完成</h2>
-                <p className="text-cyan-400 font-mono">DETECTED {analysisResults.length} POSSIBLE SCENARIOS</p>
+            <div className="w-full space-y-6">
+              <div className="text-center mb-10 mt-10">
+                <h2 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white to-cyan-400 mb-2">VERDICT READY</h2>
+                <p className="text-gray-500 font-mono tracking-[0.5em] text-xs">CALCULATION COMPLETE</p>
               </div>
-
               <div className="grid gap-6">
                 {analysisResults.map((result, idx) => (
-                  <AnalysisResultCard 
-                    key={idx} 
-                    result={result} 
-                    players={players} 
-                    index={idx} 
-                  />
+                  <AnalysisResultCard key={idx} result={result} players={players} index={idx} />
                 ))}
               </div>
             </div>
           )}
         </div>
       </div>
-
       {analysisResults && (
-        <div className="absolute bottom-0 left-0 right-0 bg-black/90 border-t border-gray-800 p-4 backdrop-blur-md z-20">
-          <div className="flex gap-4 max-w-4xl mx-auto justify-center">
-            <button 
-              onClick={onBack}
-              className="flex items-center gap-2 px-8 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-white transition-all border border-gray-600"
-            >
-              <RotateCcw size={18} /> 返回控制台
+        <div className="absolute bottom-0 left-0 right-0 bg-black/80 border-t border-white/10 p-6 backdrop-blur-xl z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.5)]">
+          <div className="flex gap-6 max-w-2xl mx-auto justify-center">
+            <button onClick={onBack} className="flex-1 flex items-center justify-center gap-3 px-8 py-4 bg-gray-800 hover:bg-gray-700 rounded-xl text-white font-bold transition-all border border-white/10 hover:border-white/30">
+              <RotateCcw size={20} /> 返回控制台
             </button>
-
-            <button 
-              onClick={onReset}
-              className="flex items-center gap-2 px-8 py-3 bg-red-600 hover:bg-red-500 rounded-lg text-white transition-all shadow-lg"
-            >
-              <XCircle size={18} /> 结束游戏
+            <button onClick={onReset} className="flex-1 flex items-center justify-center gap-3 px-8 py-4 bg-red-600 hover:bg-red-500 rounded-xl text-white font-bold transition-all shadow-lg hover:shadow-red-900/50">
+              <XCircle size={20} /> 结束游戏
             </button>
           </div>
         </div>
@@ -626,11 +655,11 @@ const AnalysisView = ({ analysisResults, players, onBack, onReset }) => {
 };
 
 // ==========================================
-// 5. 主应用逻辑 (App Component)
+// 5. App 入口
 // ==========================================
 
 export default function App() {
-  const [gameState, setGameState] = useState('setup'); 
+  const [gameState, setGameState] = useState('setup');
   const [players, setPlayers] = useState([]);
   const [impostorCount, setImpostorCount] = useState(2);
   const [logs, setLogs] = useState([]);
@@ -659,68 +688,56 @@ export default function App() {
   };
 
   return (
-    <div className="w-full h-screen bg-black text-gray-200 overflow-hidden font-sans selection:bg-cyan-500/30">
-      <div className="fixed inset-0 pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-1/2 h-1/2 bg-blue-900/20 blur-[120px] rounded-full" />
-        <div className="absolute bottom-0 right-1/4 w-1/3 h-1/3 bg-red-900/10 blur-[100px] rounded-full" />
+    <div className="w-full h-screen bg-[#050505] text-gray-200 overflow-hidden font-sans selection:bg-cyan-500/30">
+      {/* 动态星空背景 */}
+      <div className="fixed inset-0 pointer-events-none z-0">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-900/20 via-black to-black" />
+        <div className="stars absolute inset-0 opacity-50" />
+        <div className="twinkling absolute inset-0 opacity-30" />
       </div>
 
       <div className="relative z-10 h-full">
         {gameState === 'setup' && (
           <SetupView 
-            players={players} 
-            setPlayers={setPlayers}
-            impostorCount={impostorCount}
-            setImpostorCount={setImpostorCount}
+            players={players} setPlayers={setPlayers}
+            impostorCount={impostorCount} setImpostorCount={setImpostorCount}
             onStart={handleStartGame}
           />
         )}
         {gameState === 'playing' && (
           <GameView 
-            players={players}
-            setPlayers={setPlayers}
-            logs={logs}
-            setLogs={setLogs}
+            players={players} setPlayers={setPlayers}
+            logs={logs} setLogs={setLogs}
             impostorCount={impostorCount}
-            onSolve={handleSolve}
-            onReset={handleResetGame}
+            onSolve={handleSolve} onReset={handleResetGame}
           />
         )}
         {gameState === 'analyzing' && (
           <AnalysisView 
-            analysisResults={analysisResults}
-            players={players}
-            onBack={() => setGameState('playing')}
-            onReset={handleResetGame}
+            analysisResults={analysisResults} players={players}
+            onBack={() => setGameState('playing')} onReset={handleResetGame}
           />
         )}
       </div>
 
       <style>{`
-        @keyframes scanline {
-          0% { transform: translateY(-100%); }
-          100% { transform: translateY(100%); }
-        }
-        .animate-fade-in { animation: fadeIn 0.5s ease-out; }
-        .animate-fade-in-up { animation: fadeInUp 0.3s ease-out; }
-        .animate-pulse-slow { animation: pulse 3s infinite; }
+        /* 动态背景动画 */
+        .stars { background: url('https://s3-us-west-2.amazonaws.com/s.cdpn.io/1231630/stars.png') repeat; top: 0; bottom: 0; left: 0; right: 0; display: block; position: absolute; z-index: 0; }
+        .twinkling { background: url('https://s3-us-west-2.amazonaws.com/s.cdpn.io/1231630/twinkling.png') repeat; top: 0; bottom: 0; left: 0; right: 0; display: block; position: absolute; z-index: 1; animation: move-twink-back 200s linear infinite; }
+        @keyframes move-twink-back { from {background-position:0 0;} to {background-position:-10000px 5000px;} }
+        @keyframes scan-line { 0% {top: -10%;} 100% {top: 110%;} }
+        .animate-scan-line { animation: scan-line 3s linear infinite; }
         
+        /* 滚动条美化 */
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #4B5563; }
+        
+        .animate-fade-in { animation: fadeIn 0.6s ease-out; }
+        .animate-fade-in-up { animation: fadeInUp 0.4s ease-out; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-        @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 8px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: rgba(0, 0, 0, 0.3); 
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #374151; 
-          border-radius: 4px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #4B5563; 
-        }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
       `}</style>
     </div>
   );
