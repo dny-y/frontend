@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Eye, Skull, Shield, Siren, AlertTriangle, 
   Terminal, Play, RotateCcw, MapPin, Activity, 
-  Search, XCircle, Zap, LogOut, ChevronDown, FileText,
-  MessageSquareQuote
+  Search, XCircle, Zap, LogOut, ChevronDown, ChevronUp, FileText,
+  MessageSquareQuote, Check, X
 } from 'lucide-react';
 
 // ==========================================
@@ -50,15 +50,22 @@ const toSimplified = (text) => {
     .replace(/確/g, "确").replace(/據/g, "据").replace(/誤/g, "误");
 };
 
+// 更新 Mock 数据结构以匹配新版后端
 const mockSolve = (players, logs) => {
   const suspects = {};
   players.forEach(p => suspects[p.name] = 0);
-
-  logs.forEach(log => {
-    if (log.type === 'kill') suspects[log.target] = (suspects[log.target] || 0) + 20;
-    if (log.type === 'sus') suspects[log.target] = (suspects[log.target] || 0) + 8;
-    if (log.type === 'scan') suspects[log.target] = (suspects[log.target] || 0) - 100;
-    if (log.type === 'trust') suspects[log.target] = (suspects[log.target] || 0) - 5;
+  
+  // 生成 Mock Details
+  const details = logs.map(log => {
+    // 简单模拟：如果 target 嫌疑高，假设指控是真的；否则是谎言
+    const isTruth = Math.random() > 0.3; 
+    return {
+      speaker: log.actor || "SYSTEM",
+      role: isTruth ? "Crewmate" : "Impostor",
+      content: log.text,
+      is_truth: isTruth,
+      fact_check: isTruth ? "" : "(Mock: 实情不符)"
+    };
   });
 
   const sortedSuspects = Object.entries(suspects)
@@ -68,14 +75,9 @@ const mockSolve = (players, logs) => {
   return [
     { 
       rank: 1, 
-      impostors: [sortedSuspects[0], sortedSuspects[1] || sortedSuspects[players.length-1]].filter(Boolean),
-      reason: [`❌ ${sortedSuspects[0] || '?'} 撒谎: “声称在场，但被指控” (Mock数据)`, "⚠️ 检测到网络连接失败，已切换至本地模拟模式"]
-    },
-    { 
-      rank: 2, 
-      impostors: [sortedSuspects[0], sortedSuspects[2] || sortedSuspects[1]].filter(Boolean),
-      reason: ["⚠️ 备选可能性分析 (Local Mode)", "请检查后端 API URL 是否正确"]
-    },
+      impostors: [sortedSuspects[0] || 'Red', sortedSuspects[1] || 'Blue'],
+      details: details.length > 0 ? details : [{speaker: "System", role: "SYSTEM", content: "网络连接失败，显示模拟数据", is_truth: false, fact_check: ""}]
+    }
   ];
 };
 
@@ -105,9 +107,14 @@ const solveLogic = async (players, logs, impostorCount) => {
 
     const data = await response.json();
     
+    // 繁简转换
     const simplifiedData = data.map(item => ({
       ...item,
-      reason: item.reason.map(r => toSimplified(r))
+      details: item.details.map(d => ({
+        ...d,
+        content: toSimplified(d.content),
+        fact_check: toSimplified(d.fact_check)
+      }))
     }));
 
     return simplifiedData;
@@ -118,7 +125,7 @@ const solveLogic = async (players, logs, impostorCount) => {
 };
 
 // ==========================================
-// 3. 通用 UI 组件
+// 3. 子组件
 // ==========================================
 
 const PlayerAvatar = ({ player, size = "md", status = "alive", onClick, selected }) => {
@@ -167,6 +174,7 @@ const LocationPin = ({ loc, onClick, selected }) => (
   </div>
 );
 
+// [重构] 结果卡片组件 - 详细展示
 const AnalysisResultCard = ({ result, players, index }) => {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -193,7 +201,7 @@ const AnalysisResultCard = ({ result, players, index }) => {
           </div>
           {!isOpen && (
             <div className="text-xs text-gray-500 font-mono mt-2 flex items-center gap-1">
-              <MessageSquareQuote size={12} /> 点击展开查看具体发言与矛盾点 ({result.reason.length})
+              <MessageSquareQuote size={12} /> 点击展开查看详细复盘日志 ({result.details?.length || 0})
             </div>
           )}
         </div>
@@ -209,38 +217,90 @@ const AnalysisResultCard = ({ result, players, index }) => {
         </div>
       </div>
 
-      <div className={`bg-black/30 border-t border-gray-800 transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[800px] opacity-100' : 'max-h-0 opacity-0'}`}>
-        <div className="p-6 pt-4">
+      <div className={`bg-black/30 border-t border-gray-800 transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[800px] opacity-100 overflow-y-auto custom-scrollbar' : 'max-h-0 opacity-0'}`}>
+        <div className="p-4 sm:p-6 pt-4">
           <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
-            <FileText size={12} /> 谎言与伪装记录
+            <FileText size={12} /> 完整复盘日志
           </h4>
-          <div className="space-y-3">
-            {result.reason.map((r, i) => {
-              const isLie = r.includes('❌') || r.includes('撒谎');
-              const isFake = r.includes('⚠️') || r.includes('伪装');
+          <div className="space-y-2">
+            {result.details?.map((item, i) => {
+              // 状态判断
+              const isImpostor = item.role === "Impostor";
+              const isTruth = item.is_truth;
+              const isSystem = item.role === "SYSTEM";
               
+              // 颜色逻辑
+              let borderClass = 'border-gray-700/50';
+              let bgClass = 'bg-gray-800/50';
+              let icon = null;
+
+              if (isSystem) {
+                borderClass = 'border-cyan-900/50';
+                bgClass = 'bg-cyan-900/10';
+              } else if (!isTruth) {
+                borderClass = 'border-red-900/50';
+                bgClass = 'bg-red-900/10';
+                icon = <XCircle size={14} className="text-red-500" />;
+              } else if (isTruth && isImpostor) {
+                borderClass = 'border-yellow-900/50';
+                bgClass = 'bg-yellow-900/10';
+                icon = <AlertTriangle size={14} className="text-yellow-500" />;
+              } else {
+                borderClass = 'border-green-900/30';
+                bgClass = 'bg-green-900/5';
+                icon = <Check size={14} className="text-green-500" />;
+              }
+
+              // 查找玩家颜色以显示头像或色块
+              const p = players.find(x => x.name === item.speaker);
+              const colorBg = p?.colorObj.bg || 'bg-gray-600';
+
               return (
-                <div key={i} className={`flex items-start gap-3 p-3 rounded border ${
-                  isLie ? 'bg-red-900/10 border-red-900/30' : 
-                  isFake ? 'bg-yellow-900/10 border-yellow-900/30' : 
-                  'bg-gray-800/50 border-gray-700/50'
-                }`}>
-                  <span className="text-sm font-mono leading-relaxed text-gray-300">
-                    {r.split('“').map((part, idx) => (
-                      idx === 0 ? part : (
-                        <span key={idx}>
-                          “<span className="text-cyan-200 font-semibold">{part.split('”')[0]}</span>”
-                          {part.split('”')[1]}
-                        </span>
-                      )
-                    ))}
-                  </span>
+                <div key={i} className={`flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 p-3 rounded border ${borderClass} ${bgClass}`}>
+                  {/* 身份与说话者 */}
+                  <div className="flex items-center gap-3 w-32 shrink-0">
+                    {item.speaker !== "SYSTEM" && (
+                      <div className={`w-2 h-2 rounded-full ${colorBg}`} />
+                    )}
+                    <div className="flex flex-col">
+                      <span className={`text-sm font-bold ${isImpostor ? 'text-red-400' : 'text-gray-300'}`}>
+                        {item.speaker}
+                      </span>
+                      <span className="text-[10px] uppercase opacity-50 tracking-wider">
+                        {item.role === "Impostor" ? "内鬼" : item.role === "Crewmate" ? "船员" : "系统"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 状态图标 */}
+                  <div className="hidden sm:flex items-center justify-center w-8">
+                    {icon}
+                  </div>
+
+                  {/* 内容 */}
+                  <div className="flex-1 text-sm text-gray-300 font-mono">
+                    "{item.content}"
+                    {/* 如果有事实打脸，显示出来 */}
+                    {item.fact_check && (
+                      <span className="block sm:inline sm:ml-2 text-red-400 text-xs font-bold">
+                        {item.fact_check}
+                      </span>
+                    )}
+                    {/* 内鬼说真话提示 */}
+                    {isImpostor && isTruth && (
+                      <span className="block sm:inline sm:ml-2 text-yellow-500 text-xs opacity-70">
+                        (伪装: 内鬼说真话)
+                      </span>
+                    )}
+                    {!isTruth && !item.fact_check && (
+                      <span className="block sm:inline sm:ml-2 text-red-500 text-xs opacity-70">
+                        (判定为谎言)
+                      </span>
+                    )}
+                  </div>
                 </div>
               );
             })}
-            {result.reason.length === 0 && (
-              <div className="text-xs text-gray-600 italic pl-2">无明显逻辑冲突。</div>
-            )}
           </div>
         </div>
       </div>
@@ -249,7 +309,7 @@ const AnalysisResultCard = ({ result, players, index }) => {
 };
 
 // ==========================================
-// 4. 独立视图组件 (修复 ReferenceError)
+// 4. 独立视图组件
 // ==========================================
 
 const SetupView = ({ players, setPlayers, impostorCount, setImpostorCount, onStart }) => {
@@ -262,7 +322,7 @@ const SetupView = ({ players, setPlayers, impostorCount, setImpostorCount, onSta
     <div className="flex flex-col items-center justify-center h-full space-y-8 animate-fade-in overflow-y-auto">
       <div className="text-center space-y-2 mt-10">
         <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 tracking-tighter">
-          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.3</span>
+          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.4</span>
         </h1>
         <p className="text-gray-400">基于 Z3 求解器的逻辑推理系统</p>
       </div>
