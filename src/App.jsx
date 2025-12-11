@@ -139,7 +139,7 @@ const solveLogic = async (players, logs, impostorCount) => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    const response = await fetch('https://logic-api.zeabur.app/solve', {
+    const response = await fetch('https://backend-logic.zeabur.app/solve', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
