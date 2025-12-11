@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Eye, Skull, Shield, Siren, AlertTriangle, 
   Terminal, Play, RotateCcw, MapPin, Activity, 
-  Search, XCircle, Zap, LogOut, ChevronDown, ChevronUp, FileText
+  Search, XCircle, Zap, LogOut, ChevronDown, FileText,
+  MessageSquareQuote
 } from 'lucide-react';
 
 // ==========================================
@@ -35,7 +36,7 @@ const COLORS = [
 ];
 
 // ==========================================
-// 2. 后端 API 连接逻辑 (包含本地模拟回退)
+// 2. 后端 API 连接逻辑
 // ==========================================
 
 const toSimplified = (text) => {
@@ -68,12 +69,12 @@ const mockSolve = (players, logs) => {
     { 
       rank: 1, 
       impostors: [sortedSuspects[0], sortedSuspects[1] || sortedSuspects[players.length-1]].filter(Boolean),
-      reason: [`${sortedSuspects[0] || '?'} 嫌疑指数最高 (Mock)`, "检测到网络连接失败，已切换至本地模拟模式"]
+      reason: [`❌ ${sortedSuspects[0] || '?'} 撒谎: “声称在场，但被指控” (Mock数据)`, "⚠️ 检测到网络连接失败，已切换至本地模拟模式"]
     },
     { 
       rank: 2, 
       impostors: [sortedSuspects[0], sortedSuspects[2] || sortedSuspects[1]].filter(Boolean),
-      reason: ["备选可能性分析 (Local Mode)", "请检查后端 API URL 是否正确"]
+      reason: ["⚠️ 备选可能性分析 (Local Mode)", "请检查后端 API URL 是否正确"]
     },
   ];
 };
@@ -117,7 +118,7 @@ const solveLogic = async (players, logs, impostorCount) => {
 };
 
 // ==========================================
-// 3. 子组件
+// 3. 通用 UI 组件
 // ==========================================
 
 const PlayerAvatar = ({ player, size = "md", status = "alive", onClick, selected }) => {
@@ -166,13 +167,11 @@ const LocationPin = ({ loc, onClick, selected }) => (
   </div>
 );
 
-// [新增] 结果卡片组件 - 处理单个结果的展示与折叠逻辑
 const AnalysisResultCard = ({ result, players, index }) => {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
     <div className="bg-gray-900/80 border border-gray-700 rounded-xl overflow-hidden transition-colors hover:border-cyan-500/50">
-      {/* 头部：总是显示 (排名、嫌疑人、概率) */}
       <div 
         className="p-6 flex items-center cursor-pointer select-none" 
         onClick={() => setIsOpen(!isOpen)}
@@ -192,15 +191,13 @@ const AnalysisResultCard = ({ result, players, index }) => {
               })}
             </div>
           </div>
-          {/* 未展开时，只显示简短提示 */}
           {!isOpen && (
             <div className="text-xs text-gray-500 font-mono mt-2 flex items-center gap-1">
-              <FileText size={10} /> 点击展开逻辑推演详情 ({result.reason.length} 条线索)
+              <MessageSquareQuote size={12} /> 点击展开查看具体发言与矛盾点 ({result.reason.length})
             </div>
           )}
         </div>
         
-        {/* 右侧概率与箭头 */}
         <div className="flex items-center gap-6">
           <div className="text-right hidden sm:block">
             <span className="block text-2xl font-bold text-cyan-400">{(100 / (index + 1)).toFixed(1)}%</span>
@@ -212,19 +209,37 @@ const AnalysisResultCard = ({ result, players, index }) => {
         </div>
       </div>
 
-      {/* 折叠区域：逻辑推演详情 */}
-      <div className={`bg-black/30 border-t border-gray-800 transition-all duration-300 ease-in-out ${isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
-        <div className="p-6 pt-2">
-          <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 mt-2">逻辑推演 / 矛盾分析</h4>
-          <div className="space-y-2">
-            {result.reason.map((r, i) => (
-              <div key={i} className="flex items-start gap-3 p-2 rounded bg-gray-800/50 border border-gray-700/50">
-                <AlertTriangle size={14} className="text-yellow-500 mt-1 shrink-0" />
-                <span className="text-sm text-gray-300 font-mono leading-relaxed">{r}</span>
-              </div>
-            ))}
+      <div className={`bg-black/30 border-t border-gray-800 transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[800px] opacity-100' : 'max-h-0 opacity-0'}`}>
+        <div className="p-6 pt-4">
+          <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
+            <FileText size={12} /> 谎言与伪装记录
+          </h4>
+          <div className="space-y-3">
+            {result.reason.map((r, i) => {
+              const isLie = r.includes('❌') || r.includes('撒谎');
+              const isFake = r.includes('⚠️') || r.includes('伪装');
+              
+              return (
+                <div key={i} className={`flex items-start gap-3 p-3 rounded border ${
+                  isLie ? 'bg-red-900/10 border-red-900/30' : 
+                  isFake ? 'bg-yellow-900/10 border-yellow-900/30' : 
+                  'bg-gray-800/50 border-gray-700/50'
+                }`}>
+                  <span className="text-sm font-mono leading-relaxed text-gray-300">
+                    {r.split('“').map((part, idx) => (
+                      idx === 0 ? part : (
+                        <span key={idx}>
+                          “<span className="text-cyan-200 font-semibold">{part.split('”')[0]}</span>”
+                          {part.split('”')[1]}
+                        </span>
+                      )
+                    ))}
+                  </span>
+                </div>
+              );
+            })}
             {result.reason.length === 0 && (
-              <div className="text-xs text-gray-600 italic pl-2">无明显逻辑冲突，该组合符合当前所有已知条件。</div>
+              <div className="text-xs text-gray-600 italic pl-2">无明显逻辑冲突。</div>
             )}
           </div>
         </div>
@@ -234,110 +249,20 @@ const AnalysisResultCard = ({ result, players, index }) => {
 };
 
 // ==========================================
-// 4. 主应用 (AmongUsUI)
+// 4. 独立视图组件 (修复 ReferenceError)
 // ==========================================
 
-export default function App() {
-  const [gameState, setGameState] = useState('setup'); // setup, playing, analyzing
-  const [players, setPlayers] = useState([]);
-  const [impostorCount, setImpostorCount] = useState(2);
-  const [logs, setLogs] = useState([]);
-  const [analysisResults, setAnalysisResults] = useState(null);
-  const [activeAction, setActiveAction] = useState(null);
-  
-  const [actor, setActor] = useState(null);
-  const [target, setTarget] = useState(null);
-  const [location, setLocation] = useState(null);
-
-  const logEndRef = useRef(null);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
-
-  // --- Handlers ---
-
+const SetupView = ({ players, setPlayers, impostorCount, setImpostorCount, onStart }) => {
   const handleAddPlayer = (color) => {
     if (players.some(p => p.name === color.name)) return;
-    setPlayers([...players, { 
-      id: Date.now(), 
-      name: color.name, 
-      colorObj: color, 
-      status: 'alive' 
-    }]);
+    setPlayers([...players, { id: Date.now(), name: color.name, colorObj: color, status: 'alive' }]);
   };
 
-  const handleStartGame = () => {
-    if (players.length < 3) return alert("至少需要3名玩家");
-    setLogs([{ type: 'sys', text: `🎮 游戏初始化 | 玩家: ${players.length} | 内鬼: ${impostorCount}` }]);
-    setGameState('playing');
-  };
-
-  const handleResetGame = () => {
-    if (confirm("确定要结束当前游戏并返回主菜单吗？")) {
-      setLogs([]);
-      setAnalysisResults(null);
-      setGameState('setup');
-      setPlayers(players.map(p => ({ ...p, status: 'alive' })));
-    }
-  };
-
-  const executeAction = () => {
-    let logEntry = null;
-    const tName = target?.name;
-    const aName = actor?.name;
-    const locName = location?.name.split(' ')[0];
-
-    switch (activeAction) {
-      case 'saw':
-        logEntry = { type: 'saw', text: `📍 [位置] ${aName} 说 ${tName} 在 ${locName}`, actor: aName, target: tName, loc: location.id };
-        break;
-      case 'kill':
-        logEntry = { type: 'kill', text: `🔪 [指控] ${aName} 指控 ${tName} 杀人/钻管道`, actor: aName, target: tName };
-        break;
-      case 'sus':
-        logEntry = { type: 'sus', text: `👀 [怀疑] ${aName} 怀疑 ${tName} (在尸体旁)`, actor: aName, target: tName };
-        break;
-      case 'trust':
-        logEntry = { type: 'trust', text: `🛡️ [担保] ${aName} 担保 ${tName} 是好人`, actor: aName, target: tName };
-        break;
-      case 'scan':
-        logEntry = { type: 'scan', text: `💉 [铁证] 大家看见 ${tName} 做任务 (金水)`, target: tName };
-        break;
-      case 'body':
-        logEntry = { type: 'body', text: `📢 [报警] ${aName} 在 ${locName} 报告 ${tName} 的尸体`, actor: aName, target: tName, loc: location.id };
-        setPlayers(ps => ps.map(p => p.name === tName ? { ...p, status: 'dead' } : p));
-        break;
-      default: break;
-    }
-
-    if (logEntry) {
-      setLogs([...logs, logEntry]);
-      resetActionForm();
-    }
-  };
-
-  const resetActionForm = () => {
-    setActiveAction(null);
-    setActor(null);
-    setTarget(null);
-    setLocation(null);
-  };
-
-  const handleSolve = async () => {
-    setGameState('analyzing');
-    setAnalysisResults(null);
-    const results = await solveLogic(players, logs, impostorCount);
-    setAnalysisResults(results);
-  };
-
-  // --- Renders ---
-
-  const renderSetup = () => (
+  return (
     <div className="flex flex-col items-center justify-center h-full space-y-8 animate-fade-in overflow-y-auto">
-      <div className="text-center space-y-2 mt-10"> {/* Added margin-top for mobile */}
+      <div className="text-center space-y-2 mt-10">
         <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 tracking-tighter">
-          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.2</span>
+          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.3</span>
         </h1>
         <p className="text-gray-400">基于 Z3 求解器的逻辑推理系统</p>
       </div>
@@ -391,7 +316,7 @@ export default function App() {
       </div>
 
       <button 
-        onClick={handleStartGame}
+        onClick={onStart}
         className="px-12 py-4 bg-cyan-600 hover:bg-cyan-500 text-black font-black text-xl rounded-full shadow-[0_0_20px_rgba(8,145,178,0.5)] transition-all hover:scale-105 active:scale-95 flex items-center space-x-3 mb-10"
       >
         <Play size={24} />
@@ -399,10 +324,63 @@ export default function App() {
       </button>
     </div>
   );
+};
 
-  const renderGame = () => (
+const GameView = ({ players, setPlayers, logs, setLogs, impostorCount, onSolve, onReset }) => {
+  const [activeAction, setActiveAction] = useState(null);
+  const [actor, setActor] = useState(null);
+  const [target, setTarget] = useState(null);
+  const [location, setLocation] = useState(null);
+  const logEndRef = useRef(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
+
+  const resetActionForm = () => {
+    setActiveAction(null);
+    setActor(null);
+    setTarget(null);
+    setLocation(null);
+  };
+
+  const executeAction = () => {
+    let logEntry = null;
+    const tName = target?.name;
+    const aName = actor?.name;
+    const locName = location?.name.split(' ')[0];
+
+    switch (activeAction) {
+      case 'saw':
+        logEntry = { type: 'saw', text: `📍 [位置] ${aName} 说 ${tName} 在 ${locName}`, actor: aName, target: tName, loc: location.id };
+        break;
+      case 'kill':
+        logEntry = { type: 'kill', text: `🔪 [指控] ${aName} 指控 ${tName} 杀人/钻管道`, actor: aName, target: tName };
+        break;
+      case 'sus':
+        logEntry = { type: 'sus', text: `👀 [怀疑] ${aName} 怀疑 ${tName} (在尸体旁)`, actor: aName, target: tName };
+        break;
+      case 'trust':
+        logEntry = { type: 'trust', text: `🛡️ [担保] ${aName} 担保 ${tName} 是好人`, actor: aName, target: tName };
+        break;
+      case 'scan':
+        logEntry = { type: 'scan', text: `💉 [铁证] 大家看见 ${tName} 做任务 (金水)`, target: tName };
+        break;
+      case 'body':
+        logEntry = { type: 'body', text: `📢 [报警] ${aName} 在 ${locName} 报告 ${tName} 的尸体`, actor: aName, target: tName, loc: location.id };
+        setPlayers(ps => ps.map(p => p.name === tName ? { ...p, status: 'dead' } : p));
+        break;
+      default: break;
+    }
+
+    if (logEntry) {
+      setLogs([...logs, logEntry]);
+      resetActionForm();
+    }
+  };
+
+  return (
     <div className="grid grid-cols-12 gap-4 h-full p-4 overflow-hidden">
-      {/* Sidebar: Players & Status */}
       <div className="col-span-3 bg-gray-900/50 rounded-xl border border-gray-800 p-4 flex flex-col space-y-4">
         <h3 className="text-gray-400 font-mono text-sm uppercase flex items-center gap-2">
           <Activity size={16} /> Crew Status
@@ -412,26 +390,17 @@ export default function App() {
             <PlayerAvatar key={p.id} player={p} size="sm" />
           ))}
         </div>
-        
         <div className="mt-auto border-t border-gray-800 pt-4 space-y-3">
-           <button 
-             onClick={handleSolve}
-             className="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all animate-pulse-slow"
-           >
+           <button onClick={onSolve} className="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all animate-pulse-slow">
              <Search /> 开始推理 (SOLVE)
            </button>
-           <button 
-             onClick={handleResetGame}
-             className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold rounded-lg flex items-center justify-center gap-2 transition-all"
-           >
+           <button onClick={onReset} className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold rounded-lg flex items-center justify-center gap-2 transition-all">
              <LogOut size={16} /> 结束游戏
            </button>
         </div>
       </div>
 
-      {/* Main: Interactive Map & Actions */}
       <div className="col-span-6 flex flex-col space-y-4 h-full">
-        {/* Action Toolbar */}
         <div className="bg-gray-800/80 p-3 rounded-xl flex justify-around shadow-lg border border-gray-700">
           {[
             { id: 'saw', label: '看见', icon: Eye, color: 'text-cyan-400' },
@@ -454,7 +423,6 @@ export default function App() {
           ))}
         </div>
 
-        {/* Action Canvas (Dynamic) */}
         <div className="flex-1 bg-gray-950 rounded-2xl border border-gray-800 relative overflow-hidden group">
           <div className="absolute inset-0 bg-[linear-gradient(rgba(18,18,20,1)_1px,transparent_1px),linear-gradient(90deg,rgba(18,18,20,1)_1px,transparent_1px)] bg-[size:40px_40px] opacity-20 pointer-events-none" />
           
@@ -472,7 +440,6 @@ export default function App() {
                 <button onClick={resetActionForm} className="text-gray-500 hover:text-white"><XCircle /></button>
               </div>
 
-              {/* Step 1: Select Actor (Who?) */}
               {activeAction !== 'scan' && (
                 <div className="mb-4">
                   <p className="text-xs text-gray-400 mb-2 uppercase tracking-widest">Step 1: 发起人 (Who?)</p>
@@ -484,7 +451,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Step 2: Select Target (Whom?) */}
               <div className="mb-4">
                 <p className="text-xs text-gray-400 mb-2 uppercase tracking-widest">Step 2: 目标 (Whom?)</p>
                 <div className="flex gap-2 overflow-x-auto pb-2">
@@ -515,7 +481,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Right: Logs (Terminal) */}
       <div className="col-span-3 bg-black rounded-xl border border-gray-800 p-4 font-mono text-xs overflow-hidden flex flex-col relative">
         <div className="absolute top-0 left-0 right-0 h-1 bg-cyan-500 shadow-[0_0_10px_#06b6d4]" />
         <h3 className="text-cyan-500 mb-2 flex items-center gap-2">
@@ -538,8 +503,10 @@ export default function App() {
       </div>
     </div>
   );
+};
 
-  const renderAnalysis = () => (
+const AnalysisView = ({ analysisResults, players, onBack, onReset }) => {
+  return (
     <div className="w-full h-full flex flex-col overflow-hidden animate-fade-in relative">
       <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
         <div className="max-w-4xl mx-auto min-h-full flex flex-col justify-center">
@@ -579,14 +546,14 @@ export default function App() {
         <div className="absolute bottom-0 left-0 right-0 bg-black/90 border-t border-gray-800 p-4 backdrop-blur-md z-20">
           <div className="flex gap-4 max-w-4xl mx-auto justify-center">
             <button 
-              onClick={() => setGameState('playing')}
+              onClick={onBack}
               className="flex items-center gap-2 px-8 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg text-white transition-all border border-gray-600"
             >
               <RotateCcw size={18} /> 返回控制台
             </button>
 
             <button 
-              onClick={handleResetGame}
+              onClick={onReset}
               className="flex items-center gap-2 px-8 py-3 bg-red-600 hover:bg-red-500 rounded-lg text-white transition-all shadow-lg"
             >
               <XCircle size={18} /> 结束游戏
@@ -596,6 +563,40 @@ export default function App() {
       )}
     </div>
   );
+};
+
+// ==========================================
+// 5. 主应用逻辑 (App Component)
+// ==========================================
+
+export default function App() {
+  const [gameState, setGameState] = useState('setup'); 
+  const [players, setPlayers] = useState([]);
+  const [impostorCount, setImpostorCount] = useState(2);
+  const [logs, setLogs] = useState([]);
+  const [analysisResults, setAnalysisResults] = useState(null);
+
+  const handleStartGame = () => {
+    if (players.length < 3) return alert("至少需要3名玩家");
+    setLogs([{ type: 'sys', text: `🎮 游戏初始化 | 玩家: ${players.length} | 内鬼: ${impostorCount}` }]);
+    setGameState('playing');
+  };
+
+  const handleResetGame = () => {
+    if (confirm("确定要结束当前游戏并返回主菜单吗？")) {
+      setLogs([]);
+      setAnalysisResults(null);
+      setGameState('setup');
+      setPlayers(players.map(p => ({ ...p, status: 'alive' })));
+    }
+  };
+
+  const handleSolve = async () => {
+    setGameState('analyzing');
+    setAnalysisResults(null);
+    const results = await solveLogic(players, logs, impostorCount);
+    setAnalysisResults(results);
+  };
 
   return (
     <div className="w-full h-screen bg-black text-gray-200 overflow-hidden font-sans selection:bg-cyan-500/30">
@@ -605,9 +606,34 @@ export default function App() {
       </div>
 
       <div className="relative z-10 h-full">
-        {gameState === 'setup' && renderSetup()}
-        {gameState === 'playing' && renderGame()}
-        {gameState === 'analyzing' && renderAnalysis()}
+        {gameState === 'setup' && (
+          <SetupView 
+            players={players} 
+            setPlayers={setPlayers}
+            impostorCount={impostorCount}
+            setImpostorCount={setImpostorCount}
+            onStart={handleStartGame}
+          />
+        )}
+        {gameState === 'playing' && (
+          <GameView 
+            players={players}
+            setPlayers={setPlayers}
+            logs={logs}
+            setLogs={setLogs}
+            impostorCount={impostorCount}
+            onSolve={handleSolve}
+            onReset={handleResetGame}
+          />
+        )}
+        {gameState === 'analyzing' && (
+          <AnalysisView 
+            analysisResults={analysisResults}
+            players={players}
+            onBack={() => setGameState('playing')}
+            onReset={handleResetGame}
+          />
+        )}
       </div>
 
       <style>{`
