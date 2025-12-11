@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, Eye, Skull, Shield, Siren, AlertTriangle, 
   Terminal, Play, RotateCcw, MapPin, Activity, 
-  Search, XCircle, Zap, LogOut
+  Search, XCircle, Zap, LogOut, ChevronDown, ChevronUp, FileText
 } from 'lucide-react';
 
 // ==========================================
@@ -38,7 +38,6 @@ const COLORS = [
 // 2. 后端 API 连接逻辑 (包含本地模拟回退)
 // ==========================================
 
-// 辅助函数：简易繁简转换，确保即使后端返回繁体，前端也显示简体
 const toSimplified = (text) => {
   if (typeof text !== 'string') return text;
   return text
@@ -47,10 +46,9 @@ const toSimplified = (text) => {
     .replace(/邏輯/g, "逻辑").replace(/潛在/g, "潜在").replace(/約束/g, "约束")
     .replace(/檢測/g, "检测").replace(/網絡/g, "网络").replace(/連/g, "连")
     .replace(/換/g, "换").replace(/擬/g, "拟").replace(/備/g, "备")
-    .replace(/確/g, "确");
+    .replace(/確/g, "确").replace(/據/g, "据").replace(/誤/g, "误");
 };
 
-// 本地模拟算法 (当后端无法连接时使用)
 const mockSolve = (players, logs) => {
   const suspects = {};
   players.forEach(p => suspects[p.name] = 0);
@@ -82,11 +80,9 @@ const mockSolve = (players, logs) => {
 
 const solveLogic = async (players, logs, impostorCount) => {
   try {
-    // 设置 5 秒超时，避免后端休眠导致前端卡死
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    // 请确保此处是您真实的后端地址，并保留 /solve 后缀
     const response = await fetch('https://backend-logic.zeabur.app/solve', {
       method: 'POST',
       headers: {
@@ -108,7 +104,6 @@ const solveLogic = async (players, logs, impostorCount) => {
 
     const data = await response.json();
     
-    // 关键修复：在这里对返回的数据进行繁简转换
     const simplifiedData = data.map(item => ({
       ...item,
       reason: item.reason.map(r => toSimplified(r))
@@ -117,7 +112,6 @@ const solveLogic = async (players, logs, impostorCount) => {
     return simplifiedData;
   } catch (error) {
     console.warn("API Connection Failed, switching to Mock Mode:", error);
-    // 发生错误时回退到本地模拟，保证 UI 可用
     return mockSolve(players, logs);
   }
 };
@@ -171,6 +165,73 @@ const LocationPin = ({ loc, onClick, selected }) => (
     )}
   </div>
 );
+
+// [新增] 结果卡片组件 - 处理单个结果的展示与折叠逻辑
+const AnalysisResultCard = ({ result, players, index }) => {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className="bg-gray-900/80 border border-gray-700 rounded-xl overflow-hidden transition-colors hover:border-cyan-500/50">
+      {/* 头部：总是显示 (排名、嫌疑人、概率) */}
+      <div 
+        className="p-6 flex items-center cursor-pointer select-none" 
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <div className="text-4xl font-black text-gray-700 mr-6">#{result.rank}</div>
+        <div className="flex-1">
+          <div className="flex items-center gap-4 mb-1 flex-wrap">
+            <span className="text-red-400 font-bold uppercase tracking-wider text-sm">嫌疑人组合:</span>
+            <div className="flex gap-2 flex-wrap">
+              {result.impostors.map(name => {
+                const p = players.find(x => x.name === name);
+                return (
+                  <div key={name} className={`px-3 py-1 rounded-full text-white text-sm font-bold flex items-center gap-2 ${p?.colorObj.bg || 'bg-gray-600'}`}>
+                      {name}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {/* 未展开时，只显示简短提示 */}
+          {!isOpen && (
+            <div className="text-xs text-gray-500 font-mono mt-2 flex items-center gap-1">
+              <FileText size={10} /> 点击展开逻辑推演详情 ({result.reason.length} 条线索)
+            </div>
+          )}
+        </div>
+        
+        {/* 右侧概率与箭头 */}
+        <div className="flex items-center gap-6">
+          <div className="text-right hidden sm:block">
+            <span className="block text-2xl font-bold text-cyan-400">{(100 / (index + 1)).toFixed(1)}%</span>
+            <span className="text-xs text-gray-500 uppercase">Probability</span>
+          </div>
+          <div className={`transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>
+            <ChevronDown className="text-gray-400" />
+          </div>
+        </div>
+      </div>
+
+      {/* 折叠区域：逻辑推演详情 */}
+      <div className={`bg-black/30 border-t border-gray-800 transition-all duration-300 ease-in-out ${isOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'}`}>
+        <div className="p-6 pt-2">
+          <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 mt-2">逻辑推演 / 矛盾分析</h4>
+          <div className="space-y-2">
+            {result.reason.map((r, i) => (
+              <div key={i} className="flex items-start gap-3 p-2 rounded bg-gray-800/50 border border-gray-700/50">
+                <AlertTriangle size={14} className="text-yellow-500 mt-1 shrink-0" />
+                <span className="text-sm text-gray-300 font-mono leading-relaxed">{r}</span>
+              </div>
+            ))}
+            {result.reason.length === 0 && (
+              <div className="text-xs text-gray-600 italic pl-2">无明显逻辑冲突，该组合符合当前所有已知条件。</div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ==========================================
 // 4. 主应用 (AmongUsUI)
@@ -478,10 +539,9 @@ export default function App() {
     </div>
   );
 
-  // 关键修改：renderAnalysis 现在是一个允许滚动的容器
   const renderAnalysis = () => (
     <div className="w-full h-full flex flex-col overflow-hidden animate-fade-in relative">
-      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar"> {/* 内容区域可滚动 */}
+      <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
         <div className="max-w-4xl mx-auto min-h-full flex flex-col justify-center">
           {!analysisResults ? (
             <div className="text-center space-y-4 py-20">
@@ -494,7 +554,7 @@ export default function App() {
               </div>
             </div>
           ) : (
-            <div className="w-full space-y-6 pb-20"> {/* 底部留白给固定按钮 */}
+            <div className="w-full space-y-6 pb-20">
               <div className="text-center mb-8 mt-10">
                 <h2 className="text-4xl font-black text-white mb-2">分析完成</h2>
                 <p className="text-cyan-400 font-mono">DETECTED {analysisResults.length} POSSIBLE SCENARIOS</p>
@@ -502,37 +562,12 @@ export default function App() {
 
               <div className="grid gap-6">
                 {analysisResults.map((result, idx) => (
-                  <div key={idx} className="bg-gray-900/80 border border-gray-700 rounded-xl p-6 flex items-center hover:border-cyan-500/50 transition-colors">
-                    <div className="text-4xl font-black text-gray-700 mr-6">#{result.rank}</div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-4 mb-3 flex-wrap">
-                        <span className="text-red-400 font-bold uppercase tracking-wider text-sm">嫌疑人组合:</span>
-                        <div className="flex gap-2 flex-wrap">
-                          {result.impostors.map(name => {
-                            const p = players.find(x => x.name === name);
-                            return (
-                              <div key={name} className={`px-3 py-1 rounded-full text-white text-sm font-bold flex items-center gap-2 ${p?.colorObj.bg || 'bg-gray-600'}`}>
-                                 {name}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div className="text-gray-400 text-sm font-mono space-y-1">
-                        {result.reason.map((r, i) => (
-                          <div key={i} className="flex items-start gap-2">
-                            <AlertTriangle size={12} className="text-yellow-500 mt-1 shrink-0" />
-                            <span>{r}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="h-12 w-1 bg-gray-800 mx-6 hidden sm:block" />
-                    <div className="text-right hidden sm:block">
-                      <span className="block text-2xl font-bold text-cyan-400">{(100 / (idx + 1)).toFixed(1)}%</span>
-                      <span className="text-xs text-gray-500 uppercase">Probability</span>
-                    </div>
-                  </div>
+                  <AnalysisResultCard 
+                    key={idx} 
+                    result={result} 
+                    players={players} 
+                    index={idx} 
+                  />
                 ))}
               </div>
             </div>
@@ -540,7 +575,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* 底部固定操作栏 - 确保永远可见 */}
       {analysisResults && (
         <div className="absolute bottom-0 left-0 right-0 bg-black/90 border-t border-gray-800 p-4 backdrop-blur-md z-20">
           <div className="flex gap-4 max-w-4xl mx-auto justify-center">
@@ -565,7 +599,6 @@ export default function App() {
 
   return (
     <div className="w-full h-screen bg-black text-gray-200 overflow-hidden font-sans selection:bg-cyan-500/30">
-      {/* Background Ambience */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute top-0 left-1/4 w-1/2 h-1/2 bg-blue-900/20 blur-[120px] rounded-full" />
         <div className="absolute bottom-0 right-1/4 w-1/3 h-1/3 bg-red-900/10 blur-[100px] rounded-full" />
@@ -577,7 +610,6 @@ export default function App() {
         {gameState === 'analyzing' && renderAnalysis()}
       </div>
 
-      {/* CSS Animation Styles */}
       <style>{`
         @keyframes scanline {
           0% { transform: translateY(-100%); }
@@ -590,7 +622,6 @@ export default function App() {
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* Custom Scrollbar for nicer look */
         .custom-scrollbar::-webkit-scrollbar {
           width: 8px;
         }
