@@ -38,6 +38,18 @@ const COLORS = [
 // 2. 后端 API 连接逻辑 (包含本地模拟回退)
 // ==========================================
 
+// 辅助函数：简易繁简转换，确保即使后端返回繁体，前端也显示简体
+const toSimplified = (text) => {
+  if (typeof text !== 'string') return text;
+  return text
+    .replace(/撒謊/g, "撒谎").replace(/與/g, "与").replace(/實/g, "实")
+    .replace(/偽裝/g, "伪装").replace(/內鬼/g, "内鬼").replace(/說/g, "说")
+    .replace(/邏輯/g, "逻辑").replace(/潛在/g, "潜在").replace(/約束/g, "约束")
+    .replace(/檢測/g, "检测").replace(/網絡/g, "网络").replace(/連/g, "连")
+    .replace(/換/g, "换").replace(/擬/g, "拟").replace(/備/g, "备")
+    .replace(/確/g, "确");
+};
+
 // 本地模拟算法 (当后端无法连接时使用)
 const mockSolve = (players, logs) => {
   const suspects = {};
@@ -95,7 +107,14 @@ const solveLogic = async (players, logs, impostorCount) => {
     }
 
     const data = await response.json();
-    return data;
+    
+    // 关键修复：在这里对返回的数据进行繁简转换
+    const simplifiedData = data.map(item => ({
+      ...item,
+      reason: item.reason.map(r => toSimplified(r))
+    }));
+
+    return simplifiedData;
   } catch (error) {
     console.warn("API Connection Failed, switching to Mock Mode:", error);
     // 发生错误时回退到本地模拟，保证 UI 可用
@@ -404,6 +423,7 @@ export default function App() {
                 </div>
               )}
 
+              {/* Step 2: Select Target (Whom?) */}
               <div className="mb-4">
                 <p className="text-xs text-gray-400 mb-2 uppercase tracking-widest">Step 2: 目标 (Whom?)</p>
                 <div className="flex gap-2 overflow-x-auto pb-2">
