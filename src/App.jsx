@@ -36,7 +36,7 @@ const COLORS = [
 ];
 
 // ==========================================
-// 2. 后端 API 连接逻辑 (含概率计算与兼容性修复)
+// 2. 后端 API 连接逻辑
 // ==========================================
 
 const toSimplified = (text) => {
@@ -50,24 +50,25 @@ const toSimplified = (text) => {
     .replace(/確/g, "确").replace(/據/g, "据").replace(/誤/g, "误");
 };
 
-// [修改] 核心概率计算逻辑 - 增加对旧版后端的兼容
-const calculateProbabilities = (data) => {
+// [修改] 计算用于进度条显示的“置信度”，但核心保留 score (代价)
+const calculateVisualConfidence = (data) => {
   if (!data || data.length === 0) return [];
 
-  // 1. 计算适应度
+  // 1. 计算适应度 (Fitness) = 1 / (1 + score)
   let totalFitness = 0;
   const dataWithFitness = data.map(item => {
+    // 如果后端没传 score，用 rank 估算一个
     const score = item.score !== undefined ? item.score : (item.rank - 1) * 10; 
     const fitness = 1.0 / (1.0 + score);
     totalFitness += fitness;
-    return { ...item, fitness };
+    return { ...item, score, fitness };
   });
 
-  // 2. 归一化计算概率，并构建 details
+  // 2. 计算 visualProbability 供 UI 进度条使用
   return dataWithFitness.map(item => {
     let finalDetails = [];
 
-    // 情况 A: 后端返回了详细日志 (新版)
+    // 情况 A: 后端返回了详细日志
     if (item.details && Array.isArray(item.details)) {
         finalDetails = item.details.map(d => ({
             ...d,
@@ -75,7 +76,7 @@ const calculateProbabilities = (data) => {
             fact_check: toSimplified(d.fact_check)
         }));
     } 
-    // 情况 B: 后端只返回了简单原因 (旧版兼容)
+    // 情况 B: 后端只返回了简单原因
     else if (item.reason && Array.isArray(item.reason)) {
         finalDetails = item.reason.map(r => ({
             speaker: "System",
@@ -88,13 +89,14 @@ const calculateProbabilities = (data) => {
 
     return {
         ...item,
-        probability: (item.fitness / totalFitness) * 100,
+        // 代价越低，适应度越高，进度条越长
+        visualProbability: (item.fitness / totalFitness) * 100,
         details: finalDetails
     };
   });
 };
 
-// Mock 数据结构
+// [修改] Mock 数据增加 score 字段
 const mockSolve = (players, logs) => {
   const suspects = {};
   players.forEach(p => suspects[p.name] = 0);
@@ -115,7 +117,7 @@ const mockSolve = (players, logs) => {
     .sort(([,a], [,b]) => b - a)
     .map(([name]) => name);
 
-  // 模拟两个解
+  // 模拟两个解：解1 分数0(完美)，解2 分数20(有点瑕疵)
   const solutions = [
     { 
       rank: 1, 
@@ -131,7 +133,7 @@ const mockSolve = (players, logs) => {
     }
   ];
   
-  return calculateProbabilities(solutions);
+  return calculateVisualConfidence(solutions);
 };
 
 const solveLogic = async (players, logs, impostorCount) => {
@@ -159,7 +161,7 @@ const solveLogic = async (players, logs, impostorCount) => {
     }
 
     const data = await response.json();
-    return calculateProbabilities(data);
+    return calculateVisualConfidence(data);
 
   } catch (error) {
     console.warn("API Connection Failed, switching to Mock Mode:", error);
@@ -217,13 +219,20 @@ const LocationPin = ({ loc, onClick, selected }) => (
   </div>
 );
 
+// [修改] 结果卡片组件 - 显示 Cost
 const AnalysisResultCard = ({ result, players, index }) => {
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <div className="bg-gray-900/80 border border-gray-700 rounded-xl overflow-hidden transition-colors hover:border-cyan-500/50">
+    <div className="bg-gray-900/80 border border-gray-700 rounded-xl overflow-hidden transition-colors hover:border-cyan-500/50 relative group">
+      {/* 进度条基于 visualProbability (置信度) */}
       <div 
-        className="p-6 flex items-center cursor-pointer select-none" 
+        className="absolute left-0 top-0 bottom-0 bg-gradient-to-r from-cyan-900/10 to-transparent transition-all duration-1000 ease-out z-0" 
+        style={{ width: `${result.visualProbability}%` }} 
+      />
+
+      <div 
+        className="relative p-6 flex items-center cursor-pointer select-none z-10" 
         onClick={() => setIsOpen(!isOpen)}
       >
         <div className="text-4xl font-black text-gray-700 mr-6">#{result.rank}</div>
@@ -250,11 +259,11 @@ const AnalysisResultCard = ({ result, players, index }) => {
         
         <div className="flex items-center gap-6">
           <div className="text-right hidden sm:block">
-            <span className="block text-2xl font-bold text-cyan-400">
-              {result.probability ? result.probability.toFixed(1) : (100 / (index + 1)).toFixed(1)}
-              <span className="text-sm align-top">%</span>
+            {/* 显示 Cost 分数 */}
+            <span className="block text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-br from-orange-300 to-red-500">
+              {result.score !== undefined ? result.score : '-'}<span className="text-sm align-top ml-1 text-gray-500 font-normal">pts</span>
             </span>
-            <span className="text-xs text-gray-500 uppercase">Probability</span>
+            <span className="text-xs text-gray-500 uppercase">Logic Cost</span>
           </div>
           <div className={`transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`}>
             <ChevronDown className="text-gray-400" />
@@ -262,7 +271,7 @@ const AnalysisResultCard = ({ result, players, index }) => {
         </div>
       </div>
 
-      <div className={`bg-black/30 border-t border-gray-800 transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[800px] opacity-100 overflow-y-auto custom-scrollbar' : 'max-h-0 opacity-0'}`}>
+      <div className={`bg-black/30 border-t border-gray-800 transition-all duration-300 ease-in-out ${isOpen ? 'max-h-[800px] opacity-100 overflow-y-auto custom-scrollbar' : 'max-h-0 opacity-0'} relative z-10`}>
         <div className="p-4 sm:p-6 pt-4">
           <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3 flex items-center gap-2">
             <FileText size={12} /> 完整复盘日志
@@ -362,7 +371,7 @@ const SetupView = ({ players, setPlayers, impostorCount, setImpostorCount, onSta
     <div className="flex flex-col items-center justify-center h-full space-y-8 animate-fade-in overflow-y-auto">
       <div className="text-center space-y-2 mt-10">
         <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-600 tracking-tighter">
-          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.2</span>
+          AMONG US <span className="text-white block text-2xl font-mono mt-2">LOGIC ENGINE v6.5</span>
         </h1>
         <p className="text-gray-400">基于 Z3 求解器的逻辑推理系统</p>
       </div>
@@ -451,23 +460,13 @@ const GameView = ({ players, setPlayers, logs, setLogs, impostorCount, onSolve, 
     const locName = location?.name.split(' ')[0];
 
     switch (activeAction) {
-      case 'saw':
-        logEntry = { type: 'saw', text: `📍 [位置] ${aName} 说 ${tName} 在 ${locName}`, actor: aName, target: tName, loc: location.id };
-        break;
-      case 'kill':
-        logEntry = { type: 'kill', text: `🔪 [指控] ${aName} 指控 ${tName} 杀人/钻管道`, actor: aName, target: tName };
-        break;
-      case 'sus':
-        logEntry = { type: 'sus', text: `👀 [怀疑] ${aName} 怀疑 ${tName} (在尸体旁)`, actor: aName, target: tName };
-        break;
-      case 'trust':
-        logEntry = { type: 'trust', text: `🛡️ [担保] ${aName} 担保 ${tName} 是好人`, actor: aName, target: tName };
-        break;
-      case 'scan':
-        logEntry = { type: 'scan', text: `💉 [铁证] 大家看见 ${tName} 做任务 (金水)`, target: tName };
-        break;
-      case 'body':
-        logEntry = { type: 'body', text: `📢 [报警] ${aName} 在 ${locName} 报告 ${tName} 的尸体`, actor: aName, target: tName, loc: location.id };
+      case 'saw': logEntry = { type: 'saw', text: `📍 [位置] ${aName} 说 ${tName} 在 ${locName}`, actor: aName, target: tName, loc: location.id }; break;
+      case 'kill': logEntry = { type: 'kill', text: `🔪 [指控] ${aName} 指控 ${tName} 杀人/钻管道`, actor: aName, target: tName }; break;
+      case 'sus': logEntry = { type: 'sus', text: `👀 [怀疑] ${aName} 怀疑 ${tName} (在尸体旁)`, actor: aName, target: tName }; break;
+      case 'trust': logEntry = { type: 'trust', text: `🛡️ [担保] ${aName} 担保 ${tName} 是好人`, actor: aName, target: tName }; break;
+      case 'scan': logEntry = { type: 'scan', text: `💉 [铁证] 大家看见 ${tName} 做任务 (金水)`, target: tName }; break;
+      case 'body': 
+        logEntry = { type: 'body', text: `📢 [报警] ${aName} 在 ${locName} 报告尸体`, actor: aName, target: tName, loc: location.id };
         setPlayers(ps => ps.map(p => p.name === tName ? { ...p, status: 'dead' } : p));
         break;
       default: break;
@@ -480,70 +479,73 @@ const GameView = ({ players, setPlayers, logs, setLogs, impostorCount, onSolve, 
   };
 
   return (
-    <div className="grid grid-cols-12 gap-4 h-full p-4 overflow-hidden">
-      <div className="col-span-3 bg-gray-900/50 rounded-xl border border-gray-800 p-4 flex flex-col space-y-4">
-        <h3 className="text-gray-400 font-mono text-sm uppercase flex items-center gap-2">
-          <Activity size={16} /> Crew Status
-        </h3>
-        <div className="grid grid-cols-3 gap-3 overflow-y-auto max-h-[400px]">
-          {players.map(p => (
-            <PlayerAvatar key={p.id} player={p} size="sm" />
-          ))}
+    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full p-4 md:p-8 overflow-hidden relative z-10">
+      <div className="md:col-span-3 flex flex-col space-y-4">
+        <div className="bg-black/40 backdrop-blur-xl border border-white/10 rounded-3xl p-5 flex-1 flex flex-col min-h-0">
+          <h3 className="text-gray-400 font-mono text-xs uppercase tracking-widest mb-4 flex items-center gap-2 opacity-70">
+            <Activity size={14} className="text-green-400" /> Biosign Monitor
+          </h3>
+          <div className="grid grid-cols-3 md:grid-cols-2 lg:grid-cols-3 gap-4 overflow-y-auto pr-2 custom-scrollbar">
+            {players.map(p => (
+              <PlayerAvatar key={p.id} player={p} size="sm" />
+            ))}
+          </div>
         </div>
-        <div className="mt-auto border-t border-gray-800 pt-4 space-y-3">
+        
+        <div className="space-y-3">
            <button onClick={onSolve} className="w-full py-4 bg-red-600 hover:bg-red-500 text-white font-bold rounded-lg shadow-lg flex items-center justify-center gap-2 transition-all animate-pulse-slow">
              <Search /> 开始推理 (SOLVE)
            </button>
-           <button onClick={onReset} className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold rounded-lg flex items-center justify-center gap-2 transition-all">
-             <LogOut size={16} /> 结束游戏
+           <button onClick={onReset} className="w-full py-3 bg-white/5 hover:bg-white/10 text-gray-400 font-bold text-xs tracking-widest rounded-xl border border-white/5 transition-all">
+             ABORT MISSION
            </button>
         </div>
       </div>
 
-      <div className="col-span-6 flex flex-col space-y-4 h-full">
-        <div className="bg-gray-800/80 p-3 rounded-xl flex justify-around shadow-lg border border-gray-700">
+      <div className="md:col-span-6 flex flex-col space-y-4 h-full">
+        <div className="bg-black/60 backdrop-blur-xl p-2 rounded-2xl flex justify-between shadow-2xl border border-white/5">
           {[
-            { id: 'saw', label: '看见', icon: Eye, color: 'text-cyan-400' },
-            { id: 'kill', label: '指控', icon: Siren, color: 'text-red-500' },
-            { id: 'sus', label: '怀疑', icon: AlertTriangle, color: 'text-orange-400' },
-            { id: 'trust', label: '担保', icon: Shield, color: 'text-green-400' },
-            { id: 'body', label: '报警', icon: Skull, color: 'text-purple-400' },
-            { id: 'scan', label: '扫描', icon: Zap, color: 'text-yellow-300' },
+            { id: 'saw', label: 'SAW', icon: Eye, color: 'text-cyan-400', bg: 'hover:bg-cyan-500/20' },
+            { id: 'kill', label: 'KILL', icon: Siren, color: 'text-red-500', bg: 'hover:bg-red-500/20' },
+            { id: 'sus', label: 'SUS', icon: AlertTriangle, color: 'text-orange-400', bg: 'hover:bg-orange-500/20' },
+            { id: 'trust', label: 'TRUST', icon: Shield, color: 'text-green-400', bg: 'hover:bg-green-500/20' },
+            { id: 'body', label: 'BODY', icon: Skull, color: 'text-purple-400', bg: 'hover:bg-purple-500/20' },
+            { id: 'scan', label: 'SCAN', icon: Zap, color: 'text-yellow-300', bg: 'hover:bg-yellow-500/20' },
           ].map(action => (
             <button
               key={action.id}
               onClick={() => { setActiveAction(action.id); setActor(null); setTarget(null); setLocation(null); }}
-              className={`flex flex-col items-center space-y-1 p-2 rounded-lg transition-all ${activeAction === action.id ? 'bg-gray-700 scale-110 ring-2 ring-cyan-500/50' : 'hover:bg-gray-700/50'}`}
+              className={`flex-1 flex flex-col items-center gap-1 py-3 rounded-xl transition-all duration-300 ${activeAction === action.id ? 'bg-white/10 shadow-[inset_0_0_20px_rgba(255,255,255,0.05)]' : action.bg}`}
             >
-              <div className={`p-2 rounded-full bg-gray-900 ${action.color}`}>
-                <action.icon size={24} />
-              </div>
-              <span className="text-xs font-bold text-gray-300">{action.label}</span>
+              <action.icon size={22} className={`${action.color} drop-shadow-[0_0_8px_currentColor]`} />
+              <span className={`text-[10px] font-bold tracking-wider ${activeAction === action.id ? 'text-white' : 'text-gray-500'}`}>{action.label}</span>
             </button>
           ))}
         </div>
 
-        <div className="flex-1 bg-gray-950 rounded-2xl border border-gray-800 relative overflow-hidden group">
-          <div className="absolute inset-0 bg-[linear-gradient(rgba(18,18,20,1)_1px,transparent_1px),linear-gradient(90deg,rgba(18,18,20,1)_1px,transparent_1px)] bg-[size:40px_40px] opacity-20 pointer-events-none" />
+        <div className="flex-1 bg-black/40 backdrop-blur-md rounded-3xl border border-white/10 relative overflow-hidden group shadow-2xl">
+          <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:50px_50px]" />
           
           {!activeAction ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600">
-              <Terminal size={64} className="mb-4 opacity-50" />
-              <p>等待指令输入...</p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-white/20 select-none">
+              <Terminal size={80} className="mb-6 opacity-30" />
+              <p className="font-mono text-sm tracking-[0.3em] uppercase">System Ready</p>
+              <p className="text-xs opacity-50 mt-2">Waiting for input...</p>
             </div>
           ) : (
-            <div className="absolute inset-0 p-6 flex flex-col animate-fade-in-up">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                  指令: <span className="text-cyan-400 uppercase">{activeAction}</span>
+            <div className="absolute inset-0 p-6 flex flex-col animate-fade-in-up z-10">
+              <div className="flex justify-between items-center mb-6 border-b border-white/10 pb-4">
+                <h2 className="text-2xl font-black text-white flex items-center gap-3">
+                  <span className="text-cyan-500 text-3xl">/</span> 
+                  {activeAction.toUpperCase()}
                 </h2>
-                <button onClick={resetActionForm} className="text-gray-500 hover:text-white"><XCircle /></button>
+                <button onClick={resetActionForm} className="text-white/30 hover:text-white transition-colors"><XCircle /></button>
               </div>
 
               {activeAction !== 'scan' && (
-                <div className="mb-4">
-                  <p className="text-xs text-gray-400 mb-2 uppercase tracking-widest">Step 1: 发起人 (Who?)</p>
-                  <div className="flex gap-2 overflow-x-auto pb-2">
+                <div className="mb-6">
+                  <p className="text-[10px] text-cyan-400 mb-3 uppercase tracking-widest font-bold">Subject (Who?)</p>
+                  <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
                     {players.filter(p => p.status === 'alive').map(p => (
                       <PlayerAvatar key={p.id} player={p} size="sm" selected={actor?.id === p.id} onClick={setActor} />
                     ))}
@@ -551,9 +553,9 @@ const GameView = ({ players, setPlayers, logs, setLogs, impostorCount, onSolve, 
                 </div>
               )}
 
-              <div className="mb-4">
-                <p className="text-xs text-gray-400 mb-2 uppercase tracking-widest">Step 2: 目标 (Whom?)</p>
-                <div className="flex gap-2 overflow-x-auto pb-2">
+              <div className="mb-6">
+                <p className="text-[10px] text-cyan-400 mb-3 uppercase tracking-widest font-bold">Target (Whom?)</p>
+                <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
                   {players.map(p => (
                     <PlayerAvatar key={p.id} player={p} size="sm" selected={target?.id === p.id} onClick={setTarget} />
                   ))}
@@ -561,41 +563,53 @@ const GameView = ({ players, setPlayers, logs, setLogs, impostorCount, onSolve, 
               </div>
 
               {(activeAction === 'saw' || activeAction === 'body') && (
-                <div className="flex-1 relative bg-gray-900/50 rounded-lg border border-gray-700 mt-2">
+                <div className="flex-1 relative bg-black/60 rounded-2xl border border-white/10 overflow-hidden group/map">
+                   <div className="absolute inset-0 bg-gradient-to-b from-cyan-500/10 to-transparent h-[10%] w-full animate-scan-line pointer-events-none z-0" />
+                   
                    {LOCATIONS.map(loc => (
                      <LocationPin key={loc.id} loc={loc} selected={location?.id === loc.id} onClick={setLocation} />
                    ))}
-                   {!location && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span className="text-xs text-gray-500">选择地点...</span></div>}
+                   {!location && <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-xs text-white/30 font-mono">SELECT SECTOR</div>}
                 </div>
               )}
 
               <button 
                 disabled={!target || (activeAction !== 'scan' && !actor) || ((activeAction === 'saw' || activeAction === 'body') && !location)}
                 onClick={executeAction}
-                className="mt-4 w-full py-3 bg-cyan-600 disabled:bg-gray-700 disabled:text-gray-500 text-white font-bold rounded-lg transition-all"
+                className="mt-6 w-full py-4 bg-cyan-600 disabled:bg-gray-800 disabled:text-gray-600 text-white font-black tracking-widest rounded-xl transition-all hover:bg-cyan-500 hover:shadow-[0_0_20px_rgba(6,182,212,0.4)] active:scale-[0.98]"
               >
-                确认输入 (ENTER)
+                CONFIRM INPUT
               </button>
             </div>
           )}
         </div>
       </div>
 
-      <div className="col-span-3 bg-black rounded-xl border border-gray-800 p-4 font-mono text-xs overflow-hidden flex flex-col relative">
-        <div className="absolute top-0 left-0 right-0 h-1 bg-cyan-500 shadow-[0_0_10px_#06b6d4]" />
-        <h3 className="text-cyan-500 mb-2 flex items-center gap-2">
-          <Terminal size={14} /> SYSTEM_LOG
-        </h3>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-2 scrollbar-hide">
+      <div className="md:col-span-3 bg-black/80 backdrop-blur-md rounded-xl border border-white/10 p-0 font-mono text-xs overflow-hidden flex flex-col relative shadow-2xl h-full min-h-[300px]">
+        <div className="bg-white/5 p-3 border-b border-white/5 flex items-center justify-between">
+          <h3 className="text-cyan-500 flex items-center gap-2 font-bold tracking-wider">
+            <Terminal size={14} /> COMM_LOGS
+          </h3>
+          <div className="flex gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-red-500/50" />
+            <div className="w-2 h-2 rounded-full bg-yellow-500/50" />
+            <div className="w-2 h-2 rounded-full bg-green-500/50" />
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-3 space-y-3 custom-scrollbar">
+          {logs.length === 0 && <div className="text-gray-700 text-center mt-10 italic">No data stream...</div>}
           {logs.map((log, idx) => (
-            <div key={idx} className={`p-2 rounded border-l-2 ${
-              log.type === 'kill' ? 'border-red-500 bg-red-900/10 text-red-300' :
-              log.type === 'trust' ? 'border-green-500 bg-green-900/10 text-green-300' :
-              log.type === 'body' ? 'border-purple-500 bg-purple-900/10 text-purple-300' :
-              log.type === 'scan' ? 'border-yellow-500 bg-yellow-900/10 text-yellow-300' :
-              'border-cyan-500 bg-cyan-900/10 text-cyan-300'
-            }`}>
-              <span className="opacity-50">[{idx < 9 ? `0${idx+1}` : idx+1}]</span> {log.text}
+            <div key={idx} className="flex gap-3 animate-fade-in-up">
+              <span className="text-gray-600 shrink-0">{(idx+1).toString().padStart(2,'0')}</span>
+              <div className={`
+                ${log.type === 'kill' ? 'text-red-400' : 
+                  log.type === 'trust' ? 'text-green-400' : 
+                  log.type === 'body' ? 'text-purple-400 font-bold' : 
+                  log.type === 'scan' ? 'text-yellow-300' : 'text-cyan-300'}
+              `}>
+                <span className="opacity-70 mr-2 text-[10px] border border-current px-1 rounded uppercase">{log.type}</span>
+                {log.text.split(' ').slice(1).join(' ')}
+              </div>
             </div>
           ))}
           <div ref={logEndRef} />
